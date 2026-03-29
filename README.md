@@ -52,3 +52,8 @@ Each work session is stored as:
   "lastCheck": "2026-03-29 11:02:10"
 }
 ```
+
+---
+
+## ⚠️ Disclaimer ⚠️
+I'm not a fan of the "vibecoding" approach, this tool was generated with AI (Claude) based on my code and design style. 
