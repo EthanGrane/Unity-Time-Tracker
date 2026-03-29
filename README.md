@@ -23,7 +23,7 @@ Follow these steps to get started:
 Download or clone this repository into your Unity project.
 
 ### 2. Move to Editor folder
-Place the `UnityTimerTracker` folder inside: ```Assets/Editor/(Folder here)```
+Place the `UnityTimerTracker` folder inside: ```Assets/Editor/```
 
 ---
 
@@ -43,7 +43,7 @@ Place the `UnityTimerTracker` folder inside: ```Assets/Editor/(Folder here)```
 
 ## 📂 Why isn't it working?
 
-You need to put the UnityTimerTracker folder in the path ```Assets/Editor/(Folder here)```
+You need to put the UnityTimerTracker folder in the path ```Assets/Editor/```
 
 ---
 
