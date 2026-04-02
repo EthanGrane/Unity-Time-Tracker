@@ -12,12 +12,12 @@ Tracks your work sessions automatically and stores them in a simple JSON file fo
 
 ## 🛠️ Installation & Setup
 
-Git:
+Git
 ```bash
 git clone https://github.com/EthanGrane/Unity-Time-Tracker.git
 ```
 
-Unity Package Manager:
+Git URL (Unity Package Manager)
 ```bash
 https://github.com/EthanGrane/Unity-Time-Tracker.git
 ```
@@ -46,7 +46,7 @@ Place the `UnityTimerTracker` folder inside: ```Assets/Editor/```
 
 ---
 
-## 📂 Why isn't it working?
+## 📂 Troubleshooting
 
 You need to put the UnityTimerTracker folder in the path ```Assets/Editor/```
 
