@@ -12,9 +12,14 @@ Tracks your work sessions automatically and stores them in a simple JSON file fo
 
 ## 🛠️ Installation & Setup
 
-
+Git:
 ```bash
 git clone https://github.com/EthanGrane/Unity-Time-Tracker.git
+```
+
+Unity Package Manager:
+```bash
+https://github.com/EthanGrane/Unity-Time-Tracker.git
 ```
 
 Follow these steps to get started:
