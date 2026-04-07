@@ -1,0 +1,107 @@
+// TimeTrackerSettings.cs — persistent settings model (saved in EditorPrefs)
+using System;
+using UnityEngine;
+using UnityEditor;
+
+namespace UnityTimeTracker {
+
+    // ── Icon style enum ───────────────────────────────────────────────────────
+    public enum TimelineIconStyle {
+        ZzzWork,    // Work-focused: sleep 💤 and worker 👷
+        SunMoon,   // Classic: moon 🌙 and sun ☀
+    }
+
+    // ── Serializable theme snapshot ───────────────────────────────────────────
+    [Serializable]
+    public class TimeTrackerThemeData {
+        // General colors
+        public float[] accentColor  = { 0.20f, 0.80f, 0.55f, 1f };
+        public float[] bgColor      = { 0.13f, 0.13f, 0.15f, 1f };
+        public float[] bgDarkColor  = { 0.08f, 0.08f, 0.10f, 1f };
+        public float[] textColor    = { 1f,    1f,    1f,    0.85f };
+
+        // Timeline colors
+        public float[] offColor     = { 0.08f, 0.08f, 0.1f, 1f };   // off-hours bg
+        public float[] workColor    = { 0.075f, 0.15f, 0.11f, 1f };   // work-hours bg
+        public float[] moonColor    = { 0.75f, 0.82f, 1.00f, 0.90f };
+        public float[] sunColor     = { 1.00f, 0.88f, 0.35f, 0.92f };
+        public float[] sessionColor = { 0.20f, 0.80f, 0.55f, 1f };
+
+        // Icon style (serialized as int for EditorPrefs JSON compat)
+        public int iconStyleIndex = 0; // 0 = SunMoon, 1 = ZzzWork
+
+        // Icon visibility
+        public bool showOffIcon  = true;   // moon / zzz
+        public bool showWorkIcon = true;   // sun  / 👷
+
+        // Transition hours
+        public float workStartHour = 8f;
+        public float workEndHour   = 15f;
+        
+        public float nightEndHour   = 6f;
+        public float dayStartHour   = 7f;
+        public float dayEndHour     = 17f;
+        public float nightStartHour = 18f;
+
+        public TimelineIconStyle IconStyle {
+            get => (TimelineIconStyle)iconStyleIndex;
+            set => iconStyleIndex = (int)value;
+        }
+
+        public Color GetAccent()   => Arr(accentColor);
+        public Color GetBg()       => Arr(bgColor);
+        public Color GetBgDark()   => Arr(bgDarkColor);
+        public Color GetText()     => Arr(textColor);
+        public Color GetOff()      => Arr(offColor);
+        public Color GetWork()     => Arr(workColor);
+        public Color GetMoon()     => Arr(moonColor);
+        public Color GetSun()      => Arr(sunColor);
+        public Color GetSession()  => Arr(sessionColor);
+
+        public void SetAccent(Color c)   => Set(accentColor, c);
+        public void SetBg(Color c)       => Set(bgColor, c);
+        public void SetBgDark(Color c)   => Set(bgDarkColor, c);
+        public void SetText(Color c)     => Set(textColor, c);
+        public void SetOff(Color c)      => Set(offColor, c);
+        public void SetWork(Color c)     => Set(workColor, c);
+        public void SetMoon(Color c)     => Set(moonColor, c);
+        public void SetSun(Color c)      => Set(sunColor, c);
+        public void SetSession(Color c)  => Set(sessionColor, c);
+
+        static Color Arr(float[] a) => new Color(a[0], a[1], a[2], a[3]);
+        static void  Set(float[] a, Color c) { a[0]=c.r; a[1]=c.g; a[2]=c.b; a[3]=c.a; }
+    }
+
+    // ── Static settings manager ───────────────────────────────────────────────
+    public static class TimeTrackerSettings {
+        const string PREFS_KEY = "UnityTimeTracker_Theme";
+
+        static TimeTrackerThemeData _current;
+
+        public static TimeTrackerThemeData Current {
+            get {
+                if (_current == null) Load();
+                return _current;
+            }
+        }
+
+        public static void Load() {
+            string json = EditorPrefs.GetString(PREFS_KEY, "");
+            if (string.IsNullOrEmpty(json))
+                _current = new TimeTrackerThemeData();
+            else {
+                try { _current = JsonUtility.FromJson<TimeTrackerThemeData>(json); }
+                catch { _current = new TimeTrackerThemeData(); }
+            }
+        }
+
+        public static void Save() {
+            EditorPrefs.SetString(PREFS_KEY, JsonUtility.ToJson(_current));
+        }
+
+        public static void Reset() {
+            _current = new TimeTrackerThemeData();
+            Save();
+        }
+    }
+}
