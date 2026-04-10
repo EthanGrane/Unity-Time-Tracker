@@ -1,6 +1,7 @@
 // TimeTrackerWindow.cs — main window with tabs
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using UnityEditor;
 using UnityEngine;
@@ -18,19 +19,22 @@ namespace UnityTimeTracker {
         // ── State ────────────────────────────────────────────────────
         TimeTrackingData data;
 
-        // Week picker  (0 = current week, -1 = last week, etc.)
+        // Week picker (0 = current week, -1 = last week, …)
         int weekOffset = 0;
 
         // Month picker
         int monthYear  = DateTime.Today.Year;
         int monthMonth = DateTime.Today.Month;
 
-        // Day inspector  (null = none selected)
+        // Day inspector (null = none selected)
         DateTime? inspectedDay = null;
 
         static readonly string[] MONTH_NAMES = {
             "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"
         };
+
+        // English culture for all date formatting
+        static readonly CultureInfo EN = CultureInfo.InvariantCulture;
 
         // Scroll positions
         Vector2 weekScroll;
@@ -48,6 +52,7 @@ namespace UnityTimeTracker {
 
         void Refresh() {
             data = TimeTrackerCore.LoadData();
+            GitHubCommitCache.InvalidateCache();
             Repaint();
         }
 
@@ -68,7 +73,7 @@ namespace UnityTimeTracker {
                 if (GUI.Button(new Rect(position.width - pad - 64, y + 4, 64, 20), "↻ refresh",
                         new GUIStyle(EditorStyles.miniButton) {
                             fontSize = 10,
-                            normal = { textColor = TimeTrackerGUI.LabelColor }
+                            normal   = { textColor = TimeTrackerGUI.LabelColor }
                         }))
                     Refresh();
             }
@@ -114,7 +119,7 @@ namespace UnityTimeTracker {
                     FontStyle.Bold, TextAnchor.MiddleCenter));
 
                 if (!active && GUI.Button(r, GUIContent.none, GUIStyle.none)) {
-                    selectedTab = (Tab)i;
+                    selectedTab  = (Tab)i;
                     inspectedDay = null;
                     Repaint();
                 }
@@ -127,14 +132,34 @@ namespace UnityTimeTracker {
         // ════════════════════════════════════════════════════════════
         void DrawToday(float pad, ref float y) {
             float trackW = position.width - pad * 2;
-            var sessions = TimeTrackerCore.GetSessionsForDate(data, DateTime.Today);
-            double total = sessions.Sum(s => (s.end - s.start).TotalMinutes);
+            var   sessions = TimeTrackerCore.GetSessionsForDate(data, DateTime.Today);
+            double total   = sessions.Sum(s => (s.end - s.start).TotalMinutes);
 
             DrawBigNumber(pad, trackW, ref y, TimeTrackerCore.FormatDuration(total),
                 $"{sessions.Count} session{(sessions.Count != 1 ? "s" : "")} today");
 
-            TimeTrackerGUI.DrawTimeline(pad, trackW, ref y, sessions);
-            y += 20f;
+            // Fetch commits for today if GitHub is enabled
+            EnsureCommitsFetched(DateTime.Today, DateTime.Today);
+            var commits = GitHubCommitCache.GetForDate(DateTime.Today);
+
+            TimeTrackerGUI.DrawTimeline(pad, trackW, ref y, sessions, commits);
+
+            // Commit count badge
+            if (commits.Count > 0) {
+                var gh = TimeTrackerSettings.GitHub;
+                if (gh.enabled) {
+                    GUI.Label(new Rect(pad, y, trackW, 14),
+                        $"◆ {commits.Count} commit{(commits.Count != 1 ? "s" : "")} today  ({gh.owner}/{gh.repo})",
+                        TimeTrackerGUI.Style(9, TimeTrackerGUI.CommitColor));
+                    y += 16f;
+                }
+            } else if (GitHubCommitCache.IsFetching) {
+                GUI.Label(new Rect(pad, y, trackW, 14), "◆ Fetching commits…",
+                    TimeTrackerGUI.Style(9, TimeTrackerGUI.LabelColor));
+                y += 16f;
+            }
+
+            y += 8f;
 
             TimeTrackerGUI.DrawDivider(pad, trackW, ref y);
             TimeTrackerGUI.DrawSectionLabel(pad, y, "SESSIONS");
@@ -148,10 +173,26 @@ namespace UnityTimeTracker {
                     TimeTrackerGUI.Style(11, TimeTrackerGUI.LabelColor, anchor: TextAnchor.MiddleCenter));
                 y += 24f;
             }
+
+            // Commits list
+            if (commits.Count > 0) {
+                y += 4f;
+                TimeTrackerGUI.DrawDivider(pad, trackW, ref y);
+                TimeTrackerGUI.DrawSectionLabel(pad, y, "COMMITS");
+                y += 20f;
+                foreach (var c in commits.Take(10))
+                    DrawCommitRow(pad, trackW, ref y, c);
+                if (commits.Count > 10) {
+                    GUI.Label(new Rect(pad, y, trackW, 14),
+                        $"  + {commits.Count - 10} more commits",
+                        TimeTrackerGUI.Style(9, TimeTrackerGUI.LabelColor));
+                    y += 16f;
+                }
+            }
         }
 
         // ════════════════════════════════════════════════════════════
-        //  WEEK  (with per-day timelines + week navigation)
+        //  WEEK
         // ════════════════════════════════════════════════════════════
         void DrawWeek(float pad, ref float y) {
             float trackW  = position.width - pad * 2;
@@ -164,47 +205,41 @@ namespace UnityTimeTracker {
             };
 
             float pickerY = y;
-            if (GUI.Button(new Rect(pad, pickerY, 22, 22), "‹", navStyle)) {
-                weekOffset--;
-                Repaint();
-            }
+            if (GUI.Button(new Rect(pad, pickerY, 22, 22), "‹", navStyle)) { weekOffset--; Repaint(); }
             if (GUI.Button(new Rect(pad + 28, pickerY, 22, 22), "›", navStyle)) {
                 if (weekOffset < 0) weekOffset++;
                 Repaint();
             }
-            // "Today" jump button
+
             if (weekOffset != 0) {
                 if (GUI.Button(new Rect(pad + 60, pickerY, 50, 22), "today",
                         new GUIStyle(EditorStyles.miniButton) {
                             fontSize = 10,
                             normal   = { textColor = TimeTrackerGUI.AccentColor }
-                        })) {
-                    weekOffset = 0;
-                    Repaint();
-                }
+                        })) { weekOffset = 0; Repaint(); }
             }
 
-            DateTime refDay     = DateTime.Today.AddDays(weekOffset * 7);
-            var (from, to)      = TimeTrackerCore.GetWeekRange(refDay);
-            bool isCurrentWeek  = weekOffset == 0;
+            DateTime refDay        = DateTime.Today.AddDays(weekOffset * 7);
+            var (from, to)         = TimeTrackerCore.GetWeekRange(refDay);
+            bool isCurrentWeek     = weekOffset == 0;
 
             string weekLabel = isCurrentWeek
-                ? $"This week  ·  {from:dd MMM} – {to:dd MMM yyyy}"
-                : $"{from:dd MMM} – {to:dd MMM yyyy}";
+                ? $"This week  ·  {from.ToString("dd MMM", EN)} – {to.ToString("dd MMM yyyy", EN)}"
+                : $"{from.ToString("dd MMM", EN)} – {to.ToString("dd MMM yyyy", EN)}";
             GUI.Label(new Rect(pad + (weekOffset != 0 ? 120 : 60), pickerY + 3, 260, 18), weekLabel,
                 TimeTrackerGUI.Style(13, TimeTrackerGUI.TextColor, FontStyle.Bold));
 
             y += 34f;
 
-            // ── Stats header ─────────────────────────────────────────
+            // Fetch commits for this week
+            EnsureCommitsFetched(from, to);
+
             var ps = TimeTrackerCore.ComputeStats(data, from, to);
             DrawBigNumber(pad, trackW, ref y, TimeTrackerCore.FormatDuration(ps.totalMinutes),
                 $"{ps.activeDays}/7 days active  ·  {ps.totalSessions} sessions");
 
-            // ── Scroll area for 7-day timelines ─────────────────────
-            // Estimate content height: bar chart + 7 day rows
-            float dayRowH  = 110f; // per day: label + timeline + sessions mini
-            float contentH = 100f + 7 * dayRowH + 200f; // barchart + days + stats
+            float dayRowH  = 110f;
+            float contentH = 100f + 7 * dayRowH + 200f;
 
             Rect scrollView = new Rect(pad, y, trackW, scrollH);
             Rect content    = new Rect(0, 0, trackW - 16f, contentH);
@@ -213,31 +248,34 @@ namespace UnityTimeTracker {
             float cw = content.width;
             float sy = 0f;
 
-            // ── Bar chart (compact) ───────────────────────────────────
-            TimeTrackerGUI.DrawBarChart(0, cw, ref sy, ps.dailyMinutes, "ddd");
+            TimeTrackerGUI.DrawBarChart(0, cw, ref sy, ps.dailyMinutes, "ddd", EN);
 
-            // ── Divider ───────────────────────────────────────────────
             DrawInlineDiv(0, cw, ref sy);
             GUI.Label(new Rect(0, sy, cw, 16), "DAILY TIMELINES",
                 TimeTrackerGUI.Style(9, TimeTrackerGUI.LabelColor, FontStyle.Bold));
             sy += 22f;
 
-            // ── One row per day ───────────────────────────────────────
             string[] dayNames = { "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN" };
             for (int d = 0; d < 7; d++) {
-                DateTime day      = from.AddDays(d);
-                bool     isToday  = day.Date == DateTime.Today;
-                var      daySess  = TimeTrackerCore.GetSessionsForDate(data, day);
-                double   dayMins  = daySess.Sum(s => (s.end - s.start).TotalMinutes);
+                DateTime day     = from.AddDays(d);
+                bool     isToday = day.Date == DateTime.Today;
+                var      daySess = TimeTrackerCore.GetSessionsForDate(data, day);
+                double   dayMins = daySess.Sum(s => (s.end - s.start).TotalMinutes);
+                var      dayCommits = GitHubCommitCache.GetForDate(day);
 
-                // Day header
-                Color dayLabelCol = isToday ? TimeTrackerGUI.AccentColor : TimeTrackerGUI.TextColor;
-                string dayHeader  = $"{dayNames[d]}  {day:dd MMM}";
-                string dayTotal   = dayMins > 0 ? TimeTrackerCore.FormatDuration(dayMins) : "—";
+                Color  dayLabelCol = isToday ? TimeTrackerGUI.AccentColor : TimeTrackerGUI.TextColor;
+                string dayHeader   = $"{dayNames[d]}  {day.ToString("dd MMM", EN)}";
+                string dayTotal    = dayMins > 0 ? TimeTrackerCore.FormatDuration(dayMins) : "—";
+
+                // Commit count badge next to day total
+                string commitBadge = "";
+                var gh = TimeTrackerSettings.GitHub;
+                if (gh.enabled && dayCommits.Count > 0)
+                    commitBadge = $"  ◆{dayCommits.Count}";
 
                 GUI.Label(new Rect(0, sy, cw - 80, 16), dayHeader,
                     TimeTrackerGUI.Style(11, dayLabelCol, isToday ? FontStyle.Bold : FontStyle.Normal));
-                GUI.Label(new Rect(cw - 80, sy, 80, 16), dayTotal,
+                GUI.Label(new Rect(cw - 80, sy, 80, 16), dayTotal + commitBadge,
                     TimeTrackerGUI.Style(11, isToday ? TimeTrackerGUI.AccentColor : TimeTrackerGUI.LabelColor,
                         anchor: TextAnchor.UpperRight));
 
@@ -247,16 +285,14 @@ namespace UnityTimeTracker {
                                   TimeTrackerGUI.AccentColor.b, 0.3f));
                 sy += 20f;
 
-                // Timeline for this day (compact: no icons below)
-                TimeTrackerGUI.DrawTimelineCompact(0, cw, ref sy, daySess);
+                TimeTrackerGUI.DrawTimelineCompact(0, cw, ref sy, daySess, dayCommits);
 
-                // Sessions mini-list (only if sessions exist, up to 4)
                 if (daySess.Count > 0) {
                     sy += 4f;
                     int showCount = Mathf.Min(daySess.Count, 4);
                     for (int si = 0; si < showCount; si++) {
                         var (ss, se) = daySess[si];
-                        bool isLast = si == daySess.Count - 1;
+                        bool isLast  = si == daySess.Count - 1;
                         TimeTrackerGUI.DrawSessionRow(0, cw, ref sy, ss, se, isLast && isToday);
                     }
                     if (daySess.Count > 4) {
@@ -268,15 +304,12 @@ namespace UnityTimeTracker {
                 }
 
                 sy += 10f;
-
-                // Separator between days (not after last)
                 if (d < 6) {
                     EditorGUI.DrawRect(new Rect(0, sy, cw, 1), TimeTrackerGUI.DivColor);
                     sy += 10f;
                 }
             }
 
-            // ── Stats grid ────────────────────────────────────────────
             DrawInlineDiv(0, cw, ref sy);
             GUI.Label(new Rect(0, sy, cw, 16), "AVERAGES & RECORDS",
                 TimeTrackerGUI.Style(9, TimeTrackerGUI.LabelColor, FontStyle.Bold));
@@ -287,15 +320,14 @@ namespace UnityTimeTracker {
         }
 
         // ════════════════════════════════════════════════════════════
-        //  MONTH  (with day inspector)
+        //  MONTH
         // ════════════════════════════════════════════════════════════
         void DrawMonth(float pad, ref float y) {
             float trackW  = position.width - pad * 2;
             float scrollH = position.height - y - 8f;
 
-            // ── Month picker ─────────────────────────────────────────
             float pickerY = y;
-            var navStyle = new GUIStyle(EditorStyles.miniButton) {
+            var navStyle  = new GUIStyle(EditorStyles.miniButton) {
                 fontSize = 14,
                 normal   = { textColor = TimeTrackerGUI.TextColor }
             };
@@ -312,7 +344,7 @@ namespace UnityTimeTracker {
                 inspectedDay = null;
                 Repaint();
             }
-            // Jump to current month
+
             bool isCurrentMonth = monthYear == DateTime.Today.Year && monthMonth == DateTime.Today.Month;
             if (!isCurrentMonth) {
                 if (GUI.Button(new Rect(pad + 60, pickerY, 50, 22), "today",
@@ -332,18 +364,19 @@ namespace UnityTimeTracker {
                 TimeTrackerGUI.Style(13, TimeTrackerGUI.TextColor, FontStyle.Bold));
             y += 34f;
 
-            var (from, to)   = TimeTrackerCore.GetMonthRange(monthYear, monthMonth);
-            int daysInMonth  = (int)(to - from).TotalDays + 1;
-            var ps           = TimeTrackerCore.ComputeStats(data, from, to);
+            var (from, to)  = TimeTrackerCore.GetMonthRange(monthYear, monthMonth);
+            int daysInMonth = (int)(to - from).TotalDays + 1;
+            var ps          = TimeTrackerCore.ComputeStats(data, from, to);
 
-            // ── If a day is being inspected ───────────────────────────
+            // Fetch commits for this month
+            EnsureCommitsFetched(from, to);
+
             if (inspectedDay.HasValue) {
                 DrawDayInspector(pad, trackW, ref y, inspectedDay.Value, scrollH);
                 return;
             }
 
-            // ── Normal month view ─────────────────────────────────────
-            float contentH = 80f + 100f + 200f + 200f; // header + chart + calendar grid + stats
+            float contentH  = 80f + 100f + 200f + 200f;
             Rect scrollView = new Rect(pad, y, trackW, scrollH);
             Rect content    = new Rect(0, 0, trackW - 16f, contentH);
             monthScroll     = GUI.BeginScrollView(scrollView, monthScroll, content);
@@ -354,13 +387,11 @@ namespace UnityTimeTracker {
             DrawBigNumber(0, cw, ref sy, TimeTrackerCore.FormatDuration(ps.totalMinutes),
                 $"{monthLabel}  ·  {ps.activeDays}/{daysInMonth} days active  ·  {ps.totalSessions} sessions");
 
-            // Bar chart by week
             if (daysInMonth <= 14)
-                TimeTrackerGUI.DrawBarChart(0, cw, ref sy, ps.dailyMinutes, "dd");
+                TimeTrackerGUI.DrawBarChart(0, cw, ref sy, ps.dailyMinutes, "dd", EN);
             else
-                TimeTrackerGUI.DrawBarChart(0, cw, ref sy, GroupByWeek(ps.dailyMinutes, from), "dd/MM");
+                TimeTrackerGUI.DrawBarChart(0, cw, ref sy, GroupByWeek(ps.dailyMinutes, from), "dd/MM", EN);
 
-            // ── Clickable day grid ────────────────────────────────────
             DrawInlineDiv(0, cw, ref sy);
             GUI.Label(new Rect(0, sy, cw, 16), "TAP A DAY TO INSPECT",
                 TimeTrackerGUI.Style(9, TimeTrackerGUI.LabelColor, FontStyle.Bold));
@@ -368,7 +399,6 @@ namespace UnityTimeTracker {
 
             DrawMonthDayGrid(0, cw, ref sy, ps, from, daysInMonth);
 
-            // Stats
             DrawInlineDiv(0, cw, ref sy);
             GUI.Label(new Rect(0, sy, cw, 16), "AVERAGES & RECORDS",
                 TimeTrackerGUI.Style(9, TimeTrackerGUI.LabelColor, FontStyle.Bold));
@@ -383,20 +413,17 @@ namespace UnityTimeTracker {
                 PeriodStats ps, DateTime from, int daysInMonth) {
 
             string[] dayLabels = { "M", "T", "W", "T", "F", "S", "S" };
-            float cellW  = (cw - 6 * 4) / 7f;
-            float cellH  = 44f;
-            float gap    = 4f;
+            float cellW = (cw - 6 * 4) / 7f;
+            float cellH = 44f;
+            float gap   = 4f;
 
-            // Header row
             for (int col = 0; col < 7; col++) {
                 GUI.Label(new Rect(x + col * (cellW + gap), sy, cellW, 14),
                     dayLabels[col],
-                    TimeTrackerGUI.Style(9, TimeTrackerGUI.LabelColor,
-                        anchor: TextAnchor.UpperCenter));
+                    TimeTrackerGUI.Style(9, TimeTrackerGUI.LabelColor, anchor: TextAnchor.UpperCenter));
             }
             sy += 16f;
 
-            // First day column offset (Monday = 0)
             int firstDow = (int)from.DayOfWeek;
             int startCol = firstDow == 0 ? 6 : firstDow - 1;
 
@@ -404,8 +431,9 @@ namespace UnityTimeTracker {
                 ? ps.dailyMinutes.Max(d => d.minutes) : 1;
             if (maxDayMins <= 0) maxDayMins = 1;
 
-            int col2 = startCol;
+            int   col2 = startCol;
             float rowY = sy;
+            var   gh   = TimeTrackerSettings.GitHub;
 
             for (int d = 0; d < daysInMonth; d++) {
                 DateTime day    = from.AddDays(d);
@@ -415,21 +443,27 @@ namespace UnityTimeTracker {
 
                 float cx = x + col2 * (cellW + gap);
 
-                // Background cell
                 Color cellBg = today
                     ? new Color(TimeTrackerGUI.AccentColor.r, TimeTrackerGUI.AccentColor.g,
                                 TimeTrackerGUI.AccentColor.b, 0.15f)
                     : TimeTrackerGUI.BgCard;
                 EditorGUI.DrawRect(new Rect(cx, rowY, cellW, cellH), cellBg);
 
-                // Activity fill bar at bottom
                 if (mins > 0 && !future) {
-                    float fillH = Mathf.Max(2f, (float)(mins / maxDayMins) * (cellH - 2));
+                    float fillH  = Mathf.Max(2f, (float)(mins / maxDayMins) * (cellH - 2));
                     Color fillCol = today ? TimeTrackerGUI.AccentColor : TimeTrackerGUI.SessionDim;
                     EditorGUI.DrawRect(new Rect(cx, rowY + cellH - fillH, cellW, fillH), fillCol);
                 }
 
-                // Day number
+                // Commit dot in top-right corner
+                if (gh.enabled) {
+                    var dayCommits = GitHubCommitCache.GetForDate(day);
+                    if (dayCommits.Count > 0) {
+                        EditorGUI.DrawRect(new Rect(cx + cellW - 6, rowY + 3, 4, 4),
+                            TimeTrackerGUI.CommitColor);
+                    }
+                }
+
                 Color numCol = today ? TimeTrackerGUI.AccentColor
                     : (future ? TimeTrackerGUI.LabelColor : TimeTrackerGUI.TextColor);
                 GUI.Label(new Rect(cx + 2, rowY + 3, cellW - 4, 14),
@@ -438,22 +472,18 @@ namespace UnityTimeTracker {
                         today ? FontStyle.Bold : FontStyle.Normal,
                         TextAnchor.UpperCenter));
 
-                // Duration label
                 if (mins > 0) {
                     GUI.Label(new Rect(cx + 1, rowY + cellH - 16, cellW - 2, 13),
                         TimeTrackerCore.FormatDuration(mins),
-                        TimeTrackerGUI.Style(8, TimeTrackerGUI.TextColor,
-                            anchor: TextAnchor.UpperCenter));
+                        TimeTrackerGUI.Style(8, TimeTrackerGUI.TextColor, anchor: TextAnchor.UpperCenter));
                 }
 
-                // Clickable overlay
                 if (!future && GUI.Button(new Rect(cx, rowY, cellW, cellH),
                         GUIContent.none, GUIStyle.none)) {
                     inspectedDay = day;
                     Repaint();
                 }
 
-                // Today border
                 if (today)
                     DrawCellBorder(cx, rowY, cellW, cellH, TimeTrackerGUI.AccentColor);
 
@@ -464,17 +494,15 @@ namespace UnityTimeTracker {
                 }
             }
 
-            // Advance sy past the grid
             int totalCells = startCol + daysInMonth;
             int rows       = (int)Math.Ceiling(totalCells / 7.0);
             sy += rows * (cellH + gap) + 10f;
         }
 
-        // ── Day inspector (month → day drill-down) ────────────────────
+        // ── Day inspector ─────────────────────────────────────────────
         void DrawDayInspector(float pad, float trackW, ref float y,
                 DateTime day, float scrollH) {
 
-            // Back button
             if (GUI.Button(new Rect(pad, y, 22, 22), "‹",
                     new GUIStyle(EditorStyles.miniButton) {
                         fontSize = 14,
@@ -485,7 +513,6 @@ namespace UnityTimeTracker {
                 return;
             }
 
-            // Day navigation (prev / next)
             if (GUI.Button(new Rect(pad + 28, y, 22, 22), "›",
                     new GUIStyle(EditorStyles.miniButton) {
                         fontSize = 14,
@@ -495,23 +522,18 @@ namespace UnityTimeTracker {
                 if (next.Date <= DateTime.Today) {
                     inspectedDay = next;
                     if (next.Month != monthMonth || next.Year != monthYear) {
-                        monthMonth = next.Month;
-                        monthYear  = next.Year;
+                        monthMonth = next.Month; monthYear = next.Year;
                     }
                 }
                 Repaint();
                 return;
             }
-            // Prev day
-            Rect prevR = new Rect(pad - 2, y, 22, 22); // re-use left side
-            // We already drew ‹ as "back to month". For prev/next inside inspector,
-            // let's put them to the right of the date label.
+
             float labelX = pad + 56;
             GUI.Label(new Rect(labelX, y + 3, 200, 18),
-                day.ToString("dddd, dd MMM yyyy"),
+                day.ToString("dddd, dd MMM yyyy", EN),
                 TimeTrackerGUI.Style(13, TimeTrackerGUI.TextColor, FontStyle.Bold));
 
-            // Prev / next arrows beside the label
             float arrowX = labelX + 210;
             if (day.Date > DateTime.MinValue.Date) {
                 if (GUI.Button(new Rect(arrowX, y, 22, 22), "←",
@@ -520,7 +542,7 @@ namespace UnityTimeTracker {
                             normal   = { textColor = TimeTrackerGUI.LabelColor }
                         })) {
                     inspectedDay = day.AddDays(-1);
-                    DateTime nd = inspectedDay.Value;
+                    DateTime nd  = inspectedDay.Value;
                     if (nd.Month != monthMonth || nd.Year != monthYear) {
                         monthMonth = nd.Month; monthYear = nd.Year;
                     }
@@ -535,7 +557,7 @@ namespace UnityTimeTracker {
                             normal   = { textColor = TimeTrackerGUI.LabelColor }
                         })) {
                     inspectedDay = day.AddDays(1);
-                    DateTime nd = inspectedDay.Value;
+                    DateTime nd  = inspectedDay.Value;
                     if (nd.Month != monthMonth || nd.Year != monthYear) {
                         monthMonth = nd.Month; monthYear = nd.Year;
                     }
@@ -546,15 +568,15 @@ namespace UnityTimeTracker {
 
             y += 34f;
 
-            var sessions = TimeTrackerCore.GetSessionsForDate(data, day);
-            double total = sessions.Sum(s => (s.end - s.start).TotalMinutes);
-            bool   isToday = day.Date == DateTime.Today;
+            var    sessions = TimeTrackerCore.GetSessionsForDate(data, day);
+            double total    = sessions.Sum(s => (s.end - s.start).TotalMinutes);
+            bool   isToday  = day.Date == DateTime.Today;
+            var    commits  = GitHubCommitCache.GetForDate(day);
 
             DrawBigNumber(pad, trackW, ref y, TimeTrackerCore.FormatDuration(total),
-                $"{sessions.Count} session{(sessions.Count != 1 ? "s" : "")} · {day:dddd}");
+                $"{sessions.Count} session{(sessions.Count != 1 ? "s" : "")} · {day.ToString("dddd", EN)}");
 
-            // Timeline
-            TimeTrackerGUI.DrawTimeline(pad, trackW, ref y, sessions);
+            TimeTrackerGUI.DrawTimeline(pad, trackW, ref y, sessions, commits);
             y += 12f;
 
             TimeTrackerGUI.DrawDivider(pad, trackW, ref y);
@@ -563,12 +585,21 @@ namespace UnityTimeTracker {
 
             if (sessions.Count == 0) {
                 GUI.Label(new Rect(pad, y, trackW, 24), "No sessions recorded",
-                    TimeTrackerGUI.Style(11, TimeTrackerGUI.LabelColor,
-                        anchor: TextAnchor.MiddleCenter));
+                    TimeTrackerGUI.Style(11, TimeTrackerGUI.LabelColor, anchor: TextAnchor.MiddleCenter));
+                y += 24f;
             } else {
                 foreach (var (i, s) in sessions.Select((s, i) => (i, s)))
                     TimeTrackerGUI.DrawSessionRow(pad, trackW, ref y,
                         s.start, s.end, isToday && i == sessions.Count - 1);
+            }
+
+            if (commits.Count > 0) {
+                y += 8f;
+                TimeTrackerGUI.DrawDivider(pad, trackW, ref y);
+                TimeTrackerGUI.DrawSectionLabel(pad, y, "COMMITS");
+                y += 20f;
+                foreach (var c in commits)
+                    DrawCommitRow(pad, trackW, ref y, c);
             }
         }
 
@@ -584,17 +615,17 @@ namespace UnityTimeTracker {
                 return;
             }
 
-            DateTime first = data.sessions
+            DateTime first    = data.sessions
                 .Select(s => DateTime.TryParse(s.start, out var d) ? d : DateTime.MaxValue).Min();
             DateTime last     = DateTime.Today;
             int      totalDays = (int)(last - first).TotalDays + 1;
-            var ps = TimeTrackerCore.ComputeStats(data, first, last);
+            var      ps        = TimeTrackerCore.ComputeStats(data, first, last);
 
             DrawBigNumber(pad, trackW, ref y, TimeTrackerCore.FormatDuration(ps.totalMinutes),
-                $"since {first:dd MMM yyyy}  ·  {ps.activeDays}/{totalDays} days active  ·  {ps.totalSessions} sessions");
+                $"since {first.ToString("dd MMM yyyy", EN)}  ·  {ps.activeDays}/{totalDays} days active  ·  {ps.totalSessions} sessions");
 
             var monthly = GroupByMonth(ps.dailyMinutes);
-            TimeTrackerGUI.DrawBarChart(pad, trackW, ref y, monthly, "MMM");
+            TimeTrackerGUI.DrawBarChart(pad, trackW, ref y, monthly, "MMM", EN);
             TimeTrackerGUI.DrawDivider(pad, trackW, ref y);
             TimeTrackerGUI.DrawSectionLabel(pad, y, "AVERAGES & RECORDS");
             y += 20f;
@@ -605,27 +636,110 @@ namespace UnityTimeTracker {
         //  SETTINGS
         // ════════════════════════════════════════════════════════════
         void DrawSettings(float pad, ref float y) {
-            float trackW   = position.width - pad * 2;
-            float scrollH  = position.height - y - 8f;
-            var   theme    = TimeTrackerSettings.Current;
-            bool  changed  = false;
+            float trackW  = position.width - pad * 2;
+            float scrollH = position.height - y - 8f;
+            var   theme   = TimeTrackerSettings.Current;
+            var   gh      = TimeTrackerSettings.GitHub;
+            bool  changed = false;
 
             Rect scrollView = new Rect(pad, y, trackW, scrollH);
-            Rect content    = new Rect(0, 0, trackW - 16f, 860f);
+            Rect content    = new Rect(0, 0, trackW - 16f, 1080f);
             settingsScroll  = GUI.BeginScrollView(scrollView, settingsScroll, content);
 
             float sy = 0f;
             float cw = content.width;
 
+            // ── Section: GitHub Integration ──────────────────────────
+            DrawSettingsHeader(0, sy, cw, "GITHUB INTEGRATION");
+            sy += 24f;
+
+            // Enabled toggle
+            bool newGhEnabled = GUI.Toggle(new Rect(0, sy, cw, 20), gh.enabled,
+                "  Enable GitHub commit overlay", new GUIStyle(EditorStyles.toggle) {
+                    normal   = { textColor = TimeTrackerGUI.TextColor },
+                    fontSize = 11
+                });
+            if (newGhEnabled != gh.enabled) { gh.enabled = newGhEnabled; changed = true; }
+            sy += 28f;
+
+            if (gh.enabled) {
+                // Token
+                GUI.Label(new Rect(0, sy, 120, 18), "Personal Access Token",
+                    TimeTrackerGUI.Style(11, TimeTrackerGUI.TextColor));
+                sy += 20f;
+                string newToken = EditorGUI.PasswordField(new Rect(0, sy, cw, 18), gh.token);
+                if (newToken != gh.token) { gh.token = newToken; changed = true; }
+                GUI.Label(new Rect(0, sy + 20, cw, 12),
+                    "Requires  read:repo  scope  (Settings → Developer settings → Personal access tokens)",
+                    TimeTrackerGUI.Style(9, TimeTrackerGUI.LabelColor));
+                sy += 40f;
+
+                // Owner
+                GUI.Label(new Rect(0, sy, 60, 18), "Owner",
+                    TimeTrackerGUI.Style(11, TimeTrackerGUI.TextColor));
+                string newOwner = EditorGUI.TextField(new Rect(0, sy + 20, cw * 0.48f, 18),
+                    gh.owner, new GUIStyle(EditorStyles.textField) { fontSize = 11 });
+                if (newOwner != gh.owner) { gh.owner = newOwner; changed = true; }
+
+                // Repo (same row)
+                GUI.Label(new Rect(cw * 0.52f, sy, 60, 18), "Repository",
+                    TimeTrackerGUI.Style(11, TimeTrackerGUI.TextColor));
+                string newRepo = EditorGUI.TextField(new Rect(cw * 0.52f, sy + 20, cw * 0.48f, 18),
+                    gh.repo, new GUIStyle(EditorStyles.textField) { fontSize = 11 });
+                if (newRepo != gh.repo) { gh.repo = newRepo; changed = true; }
+                sy += 48f;
+
+                // Display toggles
+                bool newShowTl = GUI.Toggle(new Rect(0, sy, cw * 0.5f, 20), gh.showOnTimeline,
+                    "  Show on full timeline", new GUIStyle(EditorStyles.toggle) {
+                        normal   = { textColor = TimeTrackerGUI.TextColor }, fontSize = 11 });
+                if (newShowTl != gh.showOnTimeline) { gh.showOnTimeline = newShowTl; changed = true; }
+
+                bool newShowCp = GUI.Toggle(new Rect(cw * 0.52f, sy, cw * 0.48f, 20), gh.showOnCompact,
+                    "  Show on compact (week)", new GUIStyle(EditorStyles.toggle) {
+                        normal   = { textColor = TimeTrackerGUI.TextColor }, fontSize = 11 });
+                if (newShowCp != gh.showOnCompact) { gh.showOnCompact = newShowCp; changed = true; }
+                sy += 28f;
+
+                // Commit color
+                changed |= ColorRow(0, ref sy, cw, "Commit marker color", theme.GetCommit(), c => theme.SetCommit(c));
+
+                // Status / fetch button
+                bool canFetch = !string.IsNullOrEmpty(gh.token) &&
+                                !string.IsNullOrEmpty(gh.owner) &&
+                                !string.IsNullOrEmpty(gh.repo);
+                string statusLabel = GitHubCommitCache.IsFetching
+                    ? "Fetching…"
+                    : canFetch ? $"Configured: {gh.owner}/{gh.repo}" : "⚠ Fill in token, owner and repository";
+                Color statusCol = canFetch ? TimeTrackerGUI.CommitColor : TimeTrackerGUI.LabelColor;
+                GUI.Label(new Rect(0, sy, cw - 100, 16), statusLabel,
+                    TimeTrackerGUI.Style(9, statusCol));
+
+                if (canFetch && !GitHubCommitCache.IsFetching) {
+                    if (GUI.Button(new Rect(cw - 96, sy - 2, 96, 20), "Test fetch today",
+                            new GUIStyle(EditorStyles.miniButton) {
+                                fontSize = 10,
+                                normal   = { textColor = TimeTrackerGUI.AccentColor }
+                            })) {
+                        GitHubCommitCache.InvalidateCache();
+                        GitHubCommitCache.FetchRange(DateTime.Today, DateTime.Today, () => Repaint());
+                    }
+                }
+                sy += 24f;
+            }
+
+            sy += 8f;
+            DrawSettingsDivider(0, ref sy, cw);
+
             // ── Section: General colors ──────────────────────────────
             DrawSettingsHeader(0, sy, cw, "GENERAL COLORS");
             sy += 24f;
 
-            changed |= ColorRow(0, ref sy, cw, "Accent color",          theme.GetAccent(),  c => theme.SetAccent(c));
-            changed |= ColorRow(0, ref sy, cw, "Background",            theme.GetBg(),      c => theme.SetBg(c));
-            changed |= ColorRow(0, ref sy, cw, "Background (dark)",     theme.GetBgDark(),  c => theme.SetBgDark(c));
-            changed |= ColorRow(0, ref sy, cw, "Text",                  theme.GetText(),    c => theme.SetText(c));
-            changed |= ColorRow(0, ref sy, cw, "Session bars",          theme.GetSession(), c => theme.SetSession(c));
+            changed |= ColorRow(0, ref sy, cw, "Accent color",      theme.GetAccent(),  c => theme.SetAccent(c));
+            changed |= ColorRow(0, ref sy, cw, "Background",        theme.GetBg(),      c => theme.SetBg(c));
+            changed |= ColorRow(0, ref sy, cw, "Background (dark)", theme.GetBgDark(),  c => theme.SetBgDark(c));
+            changed |= ColorRow(0, ref sy, cw, "Text",              theme.GetText(),    c => theme.SetText(c));
+            changed |= ColorRow(0, ref sy, cw, "Session bars",      theme.GetSession(), c => theme.SetSession(c));
 
             sy += 8f;
             DrawSettingsDivider(0, ref sy, cw);
@@ -634,10 +748,10 @@ namespace UnityTimeTracker {
             DrawSettingsHeader(0, sy, cw, "TIMELINE — ZONE COLORS");
             sy += 24f;
 
-            changed |= ColorRow(0, ref sy, cw, "Off-hours color",  theme.GetOff(),  c => theme.SetOff(c));
-            changed |= ColorRow(0, ref sy, cw, "Work-hours color", theme.GetWork(), c => theme.SetWork(c));
-            changed |= ColorRow(0, ref sy, cw, "Icon color A (moon / 💤)", theme.GetMoon(), c => theme.SetMoon(c));
-            changed |= ColorRow(0, ref sy, cw, "Icon color B (sun / 👷)",  theme.GetSun(),  c => theme.SetSun(c));
+            changed |= ColorRow(0, ref sy, cw, "Off-hours color",             theme.GetOff(),  c => theme.SetOff(c));
+            changed |= ColorRow(0, ref sy, cw, "Work-hours color",            theme.GetWork(), c => theme.SetWork(c));
+            changed |= ColorRow(0, ref sy, cw, "Icon color A (moon / 💤)",    theme.GetMoon(), c => theme.SetMoon(c));
+            changed |= ColorRow(0, ref sy, cw, "Icon color B (sun / 👷)",     theme.GetSun(),  c => theme.SetSun(c));
 
             sy += 8f;
             DrawSettingsDivider(0, ref sy, cw);
@@ -696,13 +810,17 @@ namespace UnityTimeTracker {
             var previewSessions = new List<(DateTime, DateTime)> {
                 (DateTime.Today.AddHours(9), DateTime.Today.AddHours(11.5))
             };
-            TimeTrackerGUI.DrawTimeline(0, cw, ref sy, previewSessions);
+            // Show a preview commit marker too, if GitHub is enabled
+            var previewCommits = gh.enabled ? new List<CommitInfo> {
+                new CommitInfo { timestamp = DateTime.Today.AddHours(10), sha = "abc1234", message = "feat: sample commit", author = "you" }
+            } : null;
+            TimeTrackerGUI.DrawTimeline(0, cw, ref sy, previewSessions, previewCommits);
 
             sy += 8f;
             DrawSettingsDivider(0, ref sy, cw);
 
             // ── Buttons ──────────────────────────────────────────────
-            float btnW = (cw - 8f) / 2f;
+            float btnW    = (cw - 8f) / 2f;
             GUIStyle btnStyle = new GUIStyle(EditorStyles.miniButton) {
                 fontSize = 11,
                 normal   = { textColor = TimeTrackerGUI.TextColor }
@@ -710,6 +828,7 @@ namespace UnityTimeTracker {
 
             if (GUI.Button(new Rect(0, sy, btnW, 26), "💾  Save changes", btnStyle)) {
                 TimeTrackerSettings.Save();
+                GitHubCommitCache.InvalidateCache();
                 Repaint();
             }
             if (GUI.Button(new Rect(btnW + 8f, sy, btnW, 26), "↺  Reset to defaults", btnStyle)) {
@@ -748,15 +867,15 @@ namespace UnityTimeTracker {
             GUI.Label(new Rect(x, y, w - 80, 18),
                 label, TimeTrackerGUI.Style(11, TimeTrackerGUI.TextColor));
 
-            int   h    = (int)value;
-            int   m    = (int)((value - h) * 60);
+            int    h   = (int)value;
+            int    m   = (int)((value - h) * 60);
             string lbl = $"{h:00}:{m:00}";
             GUI.Label(new Rect(x + w - 76, y, 36, 18),
                 lbl, TimeTrackerGUI.Style(11, TimeTrackerGUI.AccentColor, anchor: TextAnchor.UpperRight));
 
             float next = GUI.HorizontalSlider(new Rect(x, y + 18, w - 40, 14), value, min, max);
             next = Mathf.Round(next * 4f) / 4f;
-            y += 38f;
+            y   += 38f;
 
             if (Mathf.Abs(next - value) > 0.01f) { value = next; return true; }
             return false;
@@ -765,6 +884,7 @@ namespace UnityTimeTracker {
         // ════════════════════════════════════════════════════════════
         //  HELPERS
         // ════════════════════════════════════════════════════════════
+
         void DrawBigNumber(float pad, float trackW, ref float y, string value, string sub) {
             GUI.Label(new Rect(pad, y,      trackW, 36), value,
                 TimeTrackerGUI.Style(26, TimeTrackerGUI.AccentColor, FontStyle.Bold));
@@ -785,10 +905,30 @@ namespace UnityTimeTracker {
             EditorGUI.DrawRect(new Rect(cx + cw - 1, cy,          1,  ch), col);
         }
 
+        void DrawCommitRow(float pad, float trackW, ref float y, CommitInfo c) {
+            EditorGUI.DrawRect(new Rect(pad, y + 5, 4, 4), TimeTrackerGUI.CommitColor);
+            GUI.Label(new Rect(pad + 12, y, 50, 16), c.timestamp.ToString("HH:mm"),
+                TimeTrackerGUI.Style(10, TimeTrackerGUI.LabelColor));
+            GUI.Label(new Rect(pad + 62, y, 52, 16), $"[{c.sha}]",
+                TimeTrackerGUI.Style(10, TimeTrackerGUI.CommitColor));
+            GUI.Label(new Rect(pad + 118, y, trackW - 118, 16), c.message,
+                TimeTrackerGUI.Style(10, TimeTrackerGUI.TextColor));
+            y += 18f;
+        }
+
+        /// <summary>
+        /// Kicks off a background GitHub fetch if the cache doesn't already cover this range.
+        /// </summary>
+        void EnsureCommitsFetched(DateTime from, DateTime to) {
+            var gh = TimeTrackerSettings.GitHub;
+            if (!gh.enabled) return;
+            GitHubCommitCache.FetchRange(from, to, () => Repaint());
+        }
+
         static List<(DateTime date, double minutes)> GroupByWeek(
                 List<(DateTime date, double minutes)> daily, DateTime monthStart) {
             var weeks = new List<(DateTime, double)>();
-            int i = 0;
+            int i     = 0;
             while (i < daily.Count) {
                 double   sum       = 0;
                 DateTime weekLabel = daily[i].date;

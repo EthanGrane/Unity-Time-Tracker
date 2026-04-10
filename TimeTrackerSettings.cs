@@ -21,23 +21,26 @@ namespace UnityTimeTracker {
         public float[] textColor    = { 1f,    1f,    1f,    0.85f };
 
         // Timeline colors
-        public float[] offColor     = { 0.08f, 0.08f, 0.1f, 1f };   // off-hours bg
-        public float[] workColor    = { 0.075f, 0.15f, 0.11f, 1f };   // work-hours bg
+        public float[] offColor     = { 0.08f, 0.08f, 0.1f, 1f };
+        public float[] workColor    = { 0.075f, 0.15f, 0.11f, 1f };
         public float[] moonColor    = { 0.75f, 0.82f, 1.00f, 0.90f };
         public float[] sunColor     = { 1.00f, 0.88f, 0.35f, 0.92f };
         public float[] sessionColor = { 0.20f, 0.80f, 0.55f, 1f };
+
+        // Commit marker color
+        public float[] commitColor  = { 1.00f, 0.75f, 0.20f, 0.95f };
 
         // Icon style (serialized as int for EditorPrefs JSON compat)
         public int iconStyleIndex = 0; // 0 = SunMoon, 1 = ZzzWork
 
         // Icon visibility
-        public bool showOffIcon  = true;   // moon / zzz
-        public bool showWorkIcon = true;   // sun  / 👷
+        public bool showOffIcon  = true;
+        public bool showWorkIcon = true;
 
         // Transition hours
         public float workStartHour = 8f;
         public float workEndHour   = 15f;
-        
+
         public float nightEndHour   = 6f;
         public float dayStartHour   = 7f;
         public float dayEndHour     = 17f;
@@ -57,6 +60,7 @@ namespace UnityTimeTracker {
         public Color GetMoon()     => Arr(moonColor);
         public Color GetSun()      => Arr(sunColor);
         public Color GetSession()  => Arr(sessionColor);
+        public Color GetCommit()   => Arr(commitColor);
 
         public void SetAccent(Color c)   => Set(accentColor, c);
         public void SetBg(Color c)       => Set(bgColor, c);
@@ -67,22 +71,37 @@ namespace UnityTimeTracker {
         public void SetMoon(Color c)     => Set(moonColor, c);
         public void SetSun(Color c)      => Set(sunColor, c);
         public void SetSession(Color c)  => Set(sessionColor, c);
+        public void SetCommit(Color c)   => Set(commitColor, c);
 
         static Color Arr(float[] a) => new Color(a[0], a[1], a[2], a[3]);
         static void  Set(float[] a, Color c) { a[0]=c.r; a[1]=c.g; a[2]=c.b; a[3]=c.a; }
     }
 
+    // ── GitHub integration settings ───────────────────────────────────────────
+    [Serializable]
+    public class GitHubSettings {
+        public bool   enabled         = false;
+        public string token           = "";   // Personal Access Token (read:repo scope)
+        public string owner           = "";   // GitHub username or org
+        public string repo            = "";   // Repository name
+        public bool   showOnTimeline  = true;
+        public bool   showOnCompact   = true;
+    }
+
     // ── Static settings manager ───────────────────────────────────────────────
     public static class TimeTrackerSettings {
-        const string PREFS_KEY = "UnityTimeTracker_Theme";
+        const string PREFS_KEY        = "UnityTimeTracker_Theme";
+        const string GITHUB_PREFS_KEY = "UnityTimeTracker_GitHub";
 
         static TimeTrackerThemeData _current;
+        static GitHubSettings       _github;
 
         public static TimeTrackerThemeData Current {
-            get {
-                if (_current == null) Load();
-                return _current;
-            }
+            get { if (_current == null) Load(); return _current; }
+        }
+
+        public static GitHubSettings GitHub {
+            get { if (_github == null) Load(); return _github; }
         }
 
         public static void Load() {
@@ -93,14 +112,24 @@ namespace UnityTimeTracker {
                 try { _current = JsonUtility.FromJson<TimeTrackerThemeData>(json); }
                 catch { _current = new TimeTrackerThemeData(); }
             }
+
+            string ghJson = EditorPrefs.GetString(GITHUB_PREFS_KEY, "");
+            if (string.IsNullOrEmpty(ghJson))
+                _github = new GitHubSettings();
+            else {
+                try { _github = JsonUtility.FromJson<GitHubSettings>(ghJson); }
+                catch { _github = new GitHubSettings(); }
+            }
         }
 
         public static void Save() {
-            EditorPrefs.SetString(PREFS_KEY, JsonUtility.ToJson(_current));
+            EditorPrefs.SetString(PREFS_KEY,        JsonUtility.ToJson(_current));
+            EditorPrefs.SetString(GITHUB_PREFS_KEY, JsonUtility.ToJson(_github));
         }
 
         public static void Reset() {
             _current = new TimeTrackerThemeData();
+            // GitHub credentials are NOT reset to avoid accidental data loss
             Save();
         }
     }
