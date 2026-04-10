@@ -4,9 +4,9 @@ A lightweight time tracking tool for Unity, designed especially for **self-emplo
 
 Tracks your work sessions automatically and stores them in a simple JSON file for easy access, analysis, or integration with other tools.
 
-<img width="33%" height="900" alt="image" src="https://github.com/user-attachments/assets/14ef705d-b0ce-491a-a5ac-397cfb8a8989" />
-<img width="33%" height="900" alt="image" src="https://github.com/user-attachments/assets/342da359-5e86-45a8-8bd6-2ef200d68e57" />
-<img width="33%" height="900" alt="image" src="https://github.com/user-attachments/assets/649e3b4c-1e83-46b0-9d13-9d450198ee36" />
+<img width="30%" height="900" alt="image" src="https://github.com/user-attachments/assets/14ef705d-b0ce-491a-a5ac-397cfb8a8989" />
+<img width="30%" height="900" alt="image" src="https://github.com/user-attachments/assets/342da359-5e86-45a8-8bd6-2ef200d68e57" />
+<img width="30%" height="900" alt="image" src="https://github.com/user-attachments/assets/649e3b4c-1e83-46b0-9d13-9d450198ee36" />
 
 ---
 
