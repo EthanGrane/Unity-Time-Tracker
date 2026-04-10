@@ -4,9 +4,9 @@ A lightweight time tracking tool for Unity, designed especially for **self-emplo
 
 Tracks your work sessions automatically and stores them in a simple JSON file for easy access, analysis, or integration with other tools.
 
-<img width="45%" height="auto" alt="image" src="https://github.com/user-attachments/assets/a2be1d95-4a97-48df-b3c1-5f435ae6c19f" />
-<img width="45%" height="auto" alt="image" src="https://github.com/user-attachments/assets/d191701b-158b-44f8-a6cd-114fd0985711" />
-
+<img width="33%" height="900" alt="image" src="https://github.com/user-attachments/assets/14ef705d-b0ce-491a-a5ac-397cfb8a8989" />
+<img width="33%" height="900" alt="image" src="https://github.com/user-attachments/assets/342da359-5e86-45a8-8bd6-2ef200d68e57" />
+<img width="33%" height="900" alt="image" src="https://github.com/user-attachments/assets/649e3b4c-1e83-46b0-9d13-9d450198ee36" />
 
 ---
 
@@ -30,19 +30,29 @@ Download or clone this repository into your Unity project.
 ### 2. Move to Editor folder
 Place the `UnityTimerTracker` folder inside: ```Assets/Editor/```
 
+### 3. Open the window
+Tools -> Time Tracker
+
+<img width="186" height="110" alt="image" src="https://github.com/user-attachments/assets/e9298924-fc81-4aa7-b6bd-bf5aa72e1f47" />
+
+
+
 ---
 
-## 🚀 Features
+## 🔗 GitHub Setup Guide
 
-- 🕒 Automatic session tracking using timestamps  
-- 📅 Daily, weekly, and monthly stats  
-- 📊 Work session analytics:
-  - Total time worked  
-  - Average time per day  
-  - Average time per active day  
-  - Longest / shortest session  
-- 📁 Simple JSON storage (easy to read & modify)  
-- ⚡ Lightweight and easy to integrate into any Unity project  
+You can link your repository to display commits in the timeline.
+
+1. Create a Personal Access Token
+
+Go to GitHub:
+
+Settings → Developer settings → Personal access tokens
+Click "Generate new token"
+
+Make sure to enable:
+
+✅ repo (required for private repositories)
 
 ---
 
